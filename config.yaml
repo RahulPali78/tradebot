@@ -1,0 +1,50 @@
+# NSE Options Trading Multi-Agent System Configuration
+
+# Capital Allocation
+capital_allocation:
+  total_capital: 100000  # Total trading capital in INR
+  intraday_allocation_pct: 40  # % for intraday trading
+  swing_allocation_pct: 60  # % for swing trading
+
+# Decision Thresholds
+decision:
+  min_probability_threshold: 0.70  # Main agent approves only if > 70%
+  max_daily_trades: 10  # Max trades per day across both baskets
+  cooling_period_minutes: 15  # Min time between trades on same underlying
+
+# Risk Management
+risk_management:
+  max_loss_per_trade: 2000  # Maximum loss per trade in INR
+  max_daily_loss: 10000  # Maximum daily loss in INR
+  max_position_size: 100000  # Maximum position size in INR
+  intraday_leverage: 4  # Options buying power for intraday
+  swing_leverage: 2  # Options buying power for swing
+
+# Agent Weights (for weighted probability calculation)
+agent_weights:
+  OptionsChainAnalyzer: 0.25
+  IntradayStrategyAgent: 0.20
+  SwingStrategyAgent: 0.20
+  SentimentScout: 0.15
+  RiskManager: 0.20
+
+# Trading Hours (IST)
+trading_hours:
+  market_open: "09:15"
+  market_close: "15:30"
+  pre_market: "09:00"
+  intraday_cutoff: "14:30"  # No new intraday positions after this
+
+# Data Sources
+data_sources:
+  use_nsepy: true
+  use_yahoo_finance: true
+  cache_ttl_seconds: 300  # Cache data for 5 minutes
+
+# Notification Settings
+notifications:
+  enabled: true
+  channels:
+    - telegram
+    - console
+  min_trade_size_for_notification: 10000  # INR

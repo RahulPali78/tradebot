@@ -1,0 +1,24 @@
+# NSE Options Trading Multi-Agent System
+# Python 3.9+
+
+# Data & Analysis
+pandas>=1.5.0
+numpy>=1.23.0
+
+# NSE Data (uncomment when implementing)
+# nsepy>=0.8
+# nsetools>=1.0.11
+
+# Configuration
+pyyaml>=6.0
+
+# Optional: Real-time data
+# websocket-client>=1.5.0
+
+# Testing
+pytest>=7.3.0
+pytest-asyncio>=0.21.0
+
+# Linting
+black>=23.0.0
+flake8>=6.0.0
