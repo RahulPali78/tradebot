@@ -1,192 +1,124 @@
-"""NSE Options Trading Main Agent - Orchestrator.
-
-Coordinates all specialist agents, runs the decision loop,
-and outputs trade signals with 70%+ confidence threshold.
-"""
-
+"""NSE Options Trading Main Agent - Orchestrator."""
 import yaml
 import argparse
+import logging
 from datetime import datetime
 from typing import Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import all agents
-from agents.options_chain_analyzer import OptionsChainAnalyzer
-from agents.intraday_strategy_agent import IntradayStrategyAgent
-from agents.swing_strategy_agent import SwingStrategyAgent
-from agents.sentiment_scout import SentimentScout
-from agents.risk_manager import RiskManager
-from agents.main_decision_agent import MainDecisionAgent
-from agents.base_agent import AgentResponse
+from utils.logger import setup_logging
+from database.decision_logger import DecisionLogger
+from database.trade_history import TradeHistory
+from execution.trade_executor import TradeExecutor
+from execution.alert_manager import AlertManager
 
-# Import data fetchers
-import sys
-sys.path.append('data_sources')
-from nse_data import NSEDataFetcher
+from agents import (
+    OptionsChainAnalyzer, IntradayStrategyAgent, SwingStrategyAgent,
+    SentimentScout, RiskManager, MainDecisionAgent, AgentResponse
+)
+
+logger = logging.getLogger('tradebot')
 
 
 class TradingOrchestrator:
-    """Main orchestrator for the multi-agent trading system."""
+    """Main orchestrator."""
     
     def __init__(self, config_path: str = "config.yaml"):
-        """Initialize the trading system."""
+        setup_logging()
         self.config = self._load_config(config_path)
-        self.data_fetcher = NSEDataFetcher()
         
-        # Initialize all agents
+        self.decision_logger = DecisionLogger()
+        self.trade_history = TradeHistory()
+        self.trade_executor = TradeExecutor(trade_history=self.trade_history)
+        self.alert_manager = AlertManager()
+        
         self.agents = {
             'OptionsChainAnalyzer': OptionsChainAnalyzer(),
             'IntradayStrategyAgent': IntradayStrategyAgent(),
             'SwingStrategyAgent': SwingStrategyAgent(),
             'SentimentScout': SentimentScout(),
-            'RiskManager': RiskManager(),
+            'RiskManager': RiskManager(self.config.get('capital', 100000)),
             'MainDecisionAgent': MainDecisionAgent(config_path),
         }
-        
         self.main_agent = self.agents['MainDecisionAgent']
-        self.trade_history = []
         
-        print(f"[{datetime.now()}] TradingOrchestrator initialized")
-        print(f"  Capital: ₹{self.config['capital_allocation']['total_capital']:,}")
-        print(f"  Intraday: {self.config['capital_allocation']['intraday_allocation_pct']}%")
-        print(f"  Swing: {self.config['capital_allocation']['swing_allocation_pct']}%")
-        print(f"  Threshold: {self.config['decision']['min_probability_threshold']*100:.0f}%")
+        logger.info("TradingOrchestrator initialized")
     
-    def _load_config(self, path: str) -> Dict[str, Any]:
-        """Load configuration from YAML."""
+    def _load_config(self, path: str) -> Dict:
         with open(path, 'r') as f:
             return yaml.safe_load(f)
     
-    def analyze_symbol(self, symbol: str, trade_type: str = "INTRADAY") -> Dict[str, Any]:
-        """Run full analysis on a symbol."""
+    def run_agents_in_parallel(self, symbol, option_chain, market_data, sentiment_data):
+        responses = []
         
-        print(f"\n{'='*60}")
-        print(f"Analyzing {symbol} | Trade Type: {trade_type}")
-        print(f"{'='*60}")
+        def run_agent(name, agent):
+            return name, agent.analyze(symbol, option_chain, market_data, sentiment_data)
         
-        # Fetch all required data
-        print("[1/3] Fetching market data...")
-        option_chain = self.data_fetcher.get_option_chain(symbol)
-        market_data = self.data_fetcher.get_intraday_data(symbol)
-        sentiment_data = self.data_fetcher.get_sentiment_data()
+        agents_to_run = [(n, a) for n, a in self.agents.items() if n != 'MainDecisionAgent']
         
-        if trade_type == "SWING":
-            market_data.update(self.data_fetcher.get_daily_data(symbol))
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(run_agent, n, a): n for n, a in agents_to_run}
+            for future in as_completed(futures):
+                try:
+                    name, response = future.result()
+                    logger.info(f"  {name}: {response.signal} ({response.confidence:.0f}%)")
+                    responses.append(response)
+                except Exception as e:
+                    logger.error(f"Agent error: {e}")
         
-        # Run specialist agents
-        print(f"[2/3] Running {len(self.agents)-1} specialist agents...")
-        agent_responses = []
+        return responses
+    
+    def analyze_symbol(self, symbol: str, trade_type: str = "INTRADAY"):
+        symbol = symbol.upper()
+        logger.info(f"Analyzing {symbol}")
         
-        for name, agent in self.agents.items():
-            if name == 'MainDecisionAgent':
-                continue
-            
-            response = agent.analyze(
-                symbol=symbol,
-                option_chain=option_chain,
-                market_data=market_data,
-                sentiment_data=sentiment_data
-            )
-            
-            agent_responses.append(response)
-            print(f"  ✓ {name}: {response.signal} ({response.confidence:.0f}%)")
+        # Mock data
+        option_chain = {'spot_price': 18000, 'pcr': 1.2}
+        market_data = {'ohlc_intraday': [], 'ohlc_daily': []}
+        sentiment_data = {'fii_net_flow': 300}
         
-        # Run main decision agent
-        print("[3/3] Aggregating signals...")
-        decision = self.main_agent.aggregate(agent_responses, trade_type)
+        responses = self.run_agents_in_parallel(symbol, option_chain, market_data, sentiment_data)
+        decision = self.main_agent.aggregate(responses, trade_type)
         
-        # Output result
-        print(f"\n{'='*60}")
-        print(f"FINAL DECISION: {decision.signal}")
-        print(f"Confidence: {decision.confidence:.1f}%")
-        print(f"Threshold: {self.config['decision']['min_probability_threshold']*100:.0f}%")
-        print(f"Execute: {'YES' if decision.confidence >= 70 else 'NO'}")
-        print(f"{'='*60}")
-        print(f"Reasoning: {decision.reasoning[:200]}...")
+        self.decision_logger.log_decision(symbol, decision.to_dict())
         
-        # Store trade if executed
         if decision.confidence >= 70 and decision.signal in ['BUY', 'SELL']:
-            self.trade_history.append({
-                'timestamp': datetime.now().isoformat(),
-                'symbol': symbol,
-                'signal': decision.signal,
-                'confidence': decision.confidence,
-                'trade_type': trade_type,
-            })
+            try:
+                self.trade_executor.execute_trade(
+                    symbol=symbol,
+                    signal=decision.signal,
+                    quantity=50,
+                    price=option_chain['spot_price'],
+                    confidence=decision.confidence,
+                    strategy=trade_type
+                )
+                self.alert_manager.send_trade_alert(symbol, decision.signal, decision.confidence)
+            except Exception as e:
+                logger.error(f"Trade execution failed: {e}")
         
-        return {
-            'decision': decision.to_dict(),
-            'agent_responses': [r.to_dict() for r in agent_responses],
-            'data_snapshot': {
-                'spot_price': option_chain.get('spot_price'),
-                'pcr': option_chain.get('pcr'),
-                'iv': option_chain.get('iv_current'),
-            }
-        }
+        return {'decision': decision.to_dict(), 'agent_responses': [r.to_dict() for r in responses]}
     
-    def run_scan(self, symbols: List[str] = None) -> Dict[str, Any]:
-        """Scan multiple symbols for trade opportunities."""
-        
-        if symbols is None:
-            symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
-        
+    def run_scan(self, symbols=None):
+        symbols = symbols or ['NIFTY', 'BANKNIFTY']
         results = {}
-        opportunities = []
-        
         for symbol in symbols:
-            result = self.analyze_symbol(symbol, trade_type="INTRADAY")
-            results[symbol] = result
-            
-            if result['decision']['confidence'] >= 70:
-                opportunities.append({
-                    'symbol': symbol,
-                    'signal': result['decision']['signal'],
-                    'confidence': result['decision']['confidence'],
-                })
-        
-        print(f"\n{'='*60}")
-        print(f"SCAN COMPLETE")
-        print(f"{'='*60}")
-        print(f"Symbols scanned: {len(symbols)}")
-        print(f"Opportunities found: {len(opportunities)}")
-        
-        for opp in opportunities:
-            print(f"  → {opp['symbol']}: {opp['signal']} ({opp['confidence']:.0f}%)")
-        
-        return {
-            'results': results,
-            'opportunities': opportunities,
-            'scan_time': datetime.now().isoformat(),
-        }
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get system statistics."""
-        return {
-            'decision_stats': self.main_agent.get_decision_stats(),
-            'trade_history': self.trade_history,
-            'total_trades': len(self.trade_history),
-        }
+            results[symbol] = self.analyze_symbol(symbol)
+        return results
 
 
 def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description='NSE Options Trading Multi-Agent System')
-    parser.add_argument('--symbol', '-s', help='Symbol to analyze')
-    parser.add_argument('--scan', action='store_true', help='Scan default symbols')
-    parser.add_argument('--swing', action='store_true', help='Use swing trading mode')
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--symbol', '-s')
+    parser.add_argument('--scan', action='store_true')
     args = parser.parse_args()
     
-    orchestrator = TradingOrchestrator()
-    
+    orch = TradingOrchestrator()
     if args.symbol:
-        trade_type = "SWING" if args.swing else "INTRADAY"
-        orchestrator.analyze_symbol(args.symbol.upper(), trade_type)
+        orch.analyze_symbol(args.symbol.upper())
     elif args.scan:
-        orchestrator.run_scan()
+        orch.run_scan()
     else:
-        # Default: demo mode
-        print("Running in demo mode...")
-        orchestrator.analyze_symbol("NIFTY", "INTRADAY")
+        orch.analyze_symbol("NIFTY")
 
 
 if __name__ == "__main__":

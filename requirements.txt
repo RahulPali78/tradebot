@@ -1,24 +1,40 @@
-# NSE Options Trading Multi-Agent System
-# Python 3.9+
-
-# Data & Analysis
-pandas>=1.5.0
-numpy>=1.23.0
-
-# NSE Data (uncomment when implementing)
-# nsepy>=0.8
-# nsetools>=1.0.11
-
-# Configuration
+# Core dependencies
+numpy>=1.24.0
+pandas>=2.0.0
 pyyaml>=6.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
 
-# Optional: Real-time data
-# websocket-client>=1.5.0
+# Data and API
+requests>=2.31.0
+nsepy>=0.8
+yfinance>=0.2.18
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+
+# Email notifications
+secure-smtplib>=0.1.0
 
 # Testing
-pytest>=7.3.0
+pytest>=7.4.0
+pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
 
-# Linting
-black>=23.0.0
-flake8>=6.0.0
+# Utilities
+tenacity>=8.2.0
+python-json-logger>=2.0.0
+redis>=5.0.0
+
+# Development
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.5.0
+pre-commit>=3.4.0
+
+# Type stubs
+types-PyYAML>=6.0.0
+types-requests>=2.31.0
